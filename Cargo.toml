@@ -1,7 +1,7 @@
 [package]
 name = "daQuiz"
-version = "0.1.0"
-authors = ["[your_name] <[your_email]>"]
+version = "0.0.42"
+authors = ["ETHWarsawHackers <ewh@dyor.lol>"]
 edition = "2021"
 
 [dependencies]

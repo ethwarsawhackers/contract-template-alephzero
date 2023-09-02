@@ -4,22 +4,23 @@
 mod daQuiz {
     use ink::prelude::string::String;
     use ink::prelude::vec::Vec;
+    use ink::storage::traits::StorageLayout;
 
     #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub enum Error {
-        NotAnOwner, NotAllowed, NotFound
+        NotAllowed, NotFound
     }
 
-    #[derive(Debug, Default, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Default, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub struct Style {
         pub background: String,
         pub text: String,
     }
 
-    #[derive(Debug, Default, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Default, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub struct Metadata {
         pub title: String,
         pub tokens: String,
@@ -31,28 +32,35 @@ mod daQuiz {
         pub style: Style,
     }
     
-    #[derive(Debug, Default, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Default, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub struct QuestionEntry {
         pub id: String,
         pub answers: Vec<String>
     }
 
-    #[derive(Debug, Default, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
-    pub struct Entry {
+    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+    pub struct InputEntry {
         pub author: String,
+        pub questions: Vec<QuestionEntry>
+    }
+
+    #[derive(Debug, PartialEq, Clone, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+    pub struct Entry {
+        pub author: AccountId,
         pub questions: Vec<QuestionEntry>
     }
     
     #[derive(Debug, Clone, Default, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub struct Answer {
         pub caption: String,
     }
 
-    #[derive(Debug, Clone, Default, PartialEq, Eq, scale::Encode, scale::Decode)]
-    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    #[derive(Debug, Default, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
     pub struct Question {
         pub id: String,
         pub question: String,
@@ -60,21 +68,30 @@ mod daQuiz {
         pub answers: Vec<Answer>,
     }
 
-    #[ink(storage)]
-    #[derive(Default)]
-    pub struct DaQuiz {
+    #[derive(Debug, Default, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+    pub struct DaState {
         pub metadata: Metadata,
         pub entries: Vec<Entry>,
         pub questions: Vec<Question>
+    }
+
+    #[ink(storage)]
+    pub struct DaQuiz {
+        operator: AccountId,
+        state: DaState
     }
 
     impl DaQuiz {
         #[ink(constructor)]
         pub fn new(init_metadata: Metadata, init_questions: Vec<Question>) -> Self {
             Self {
-                metadata: init_metadata, 
-                entries: Vec::new(), 
-                questions: init_questions 
+                operator: Self::env().caller(),
+                state: DaState {
+                    metadata: init_metadata, 
+                    entries: Vec::new(), 
+                    questions: init_questions
+                }
             }
         }
 
@@ -85,10 +102,11 @@ mod daQuiz {
 
         #[ink(message)]
         pub fn getMetadata(&self) -> Metadata {
-            self.metadata
+            let meta = &self.state.metadata;
+            meta.clone()
         }
 
-        fn filter_by_indices<T: Clone>(indices: Vec<u32>, questions: Vec<T>) -> Vec<T> {
+        fn filter<T: Clone>(indices: Vec<u32>, questions: Vec<T>) -> Vec<T> {
             let mut filtered_questions = Vec::new();
             for &index in &indices {
                 if index < questions.len() as u32 {
@@ -100,31 +118,64 @@ mod daQuiz {
 
         #[ink(message)]
         pub fn getQuestions(&self, indices: Vec<u32>) -> Vec<Question> {
-            Self::filter_by_indices(indices, self.questions)
+            Self::filter(indices, self.state.questions.clone())
         }
         
         #[ink(message)]
         pub fn getEntries(&self) -> Vec<Entry> {
-            self.entries
+            assert_eq!(
+                self.env().caller(),
+                self.operator,
+                "caller {:?} does not have sufficient permissions, only {:?} does",
+                self.env().caller(),
+                self.operator,
+            );
+            
+            let result = &self.state.entries;
+            result.clone().to_vec()
         }
         
         #[ink(message)]
-        pub fn setOwnEntry(&mut self, data: Entry) {
-            self.entries.push(data)
+        pub fn setOwnEntry(&mut self, data: InputEntry) -> Result<(), Error> {
+            if self.state.metadata.maxEntries > self.state.entries.len().try_into().unwrap() {
+            
+                let bytes = data.author.as_bytes();
+                let id = AccountId::try_from(bytes)
+                    .expect("Incorrect address");
+        
+                self.state.entries.push(Entry {
+                    author: id,
+                    questions: data.questions
+                });
+
+                Ok(())
+            } else {
+                Err(Error::NotAllowed)
+            }
         }
         
         #[ink(message)]
-        pub fn updateMetadata(&mut self, data: Metadata) {
-            self.metadata = data
+        pub fn updateMetadata(&mut self, data: Metadata) -> Result<(), Error> {
+            if self.env().caller().eq(&self.operator) { 
+                self.state.metadata = data;
+                Ok(())
+            } else {
+                Err(Error::NotAllowed)
+            }
         }
 
         #[ink(message)]
         pub fn updateQuestion(&mut self, question: Question) -> Result<(), Error> {
-            if let Some(pos) = self.questions.iter().position(|&q| q.id == question.id) {
-                self.questions[pos] = question;
-                Ok(())
+            if self.env().caller().eq(&self.operator) { 
+                if let Some(pos) = self.state.questions.iter().position(|q| q.id == question.id) {
+                    self.state.questions[pos] = question;
+                    Ok(())
+                } else {
+                    self.state.questions.push(question);
+                    Ok(())
+                }
             } else {
-                return Err(Error::NotFound)
+                Err(Error::NotAllowed)
             }
         }
     }
@@ -153,7 +204,7 @@ mod daQuiz {
             };
 
             let mut daQuiz = DaQuiz::new(metadata, Default::default());
-            assert_eq!(daQuiz.getMetadata(), metadata);
+            assert_eq!(daQuiz.getMetadata(), metadata.clone());
         }
     }
 }
